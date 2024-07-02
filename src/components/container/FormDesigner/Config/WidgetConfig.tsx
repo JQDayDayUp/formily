@@ -511,6 +511,7 @@ export default class WidgetConfig extends Vue {
                     <a-select-option value="AttCalendar">考勤日历</a-select-option>
                     <a-select-option value="AttQishu">考勤期数</a-select-option>
                     <a-select-option value="HUJI">户籍</a-select-option>
+                    <a-select-option value="HrStore">门店列表</a-select-option>
                   </a-select>
                 </div>
               </a-form-model-item>,
