@@ -86,17 +86,27 @@ export default class GenerateFormItem extends Vue {
   type!: boolean;
 
   private current = this.models[this.widget.model]; // 当前字段值
+  private treeObj = {
+    value: this.models[this.widget.model],
+    label: this.widget.options.assistField ? this.models[this.widget.options.assistField] : '',
+  }; // 懒加载树绑定值 - 单个
+  private treeList: any[] = []; // 懒加载树绑定值 - 多个
   private userVisible = false; // 是否显示人员选择器
   private options: any[] = []; // 人员选择器临时存储对象
   private previewVisible = false; // 是否显示附件预览
-
+  private treeShowName = ''; // 树懒加载查询搜索字段
   $refs!: {
     selector: any;
   };
 
   @Watch('models', { deep: true })
   private modelsChange(newVal: any) {
+    console.log('models监听', newVal);
     this.current = newVal[this.widget.model];
+    this.treeObj.value = newVal[this.widget.model];
+    this.treeObj.label = this.widget.options.assistField
+      ? newVal[this.widget.options.assistField]
+      : '';
   }
 
   @Emit('checked')
@@ -119,8 +129,9 @@ export default class GenerateFormItem extends Vue {
    */
   @Watch('current', { deep: true })
   private currentChange(newVal: any) {
+    // console.log('监听进来', newVal);
     this.models[this.widget.model] = newVal;
-
+    this.treeObj.value = newVal;
     this.updateModels({
       ...this.models,
       [this.widget.model]: newVal,
@@ -136,9 +147,14 @@ export default class GenerateFormItem extends Vue {
 
   private treeSelected: any = []; // 下拉树选中的需要显示的节点名称
   private cascaderSelected = '';
+  private imgViewObj: any = {
+    visible: false,
+    url: '',
+  }; // 图片预览 - 只读模式
 
   created() {
     this.excuteOption();
+    // console.log('初始化fff', this.remote);
   }
 
   excuteOption() {
@@ -153,6 +169,7 @@ export default class GenerateFormItem extends Vue {
 
           if (this.widget.options.assistField !== '') {
             this.treeSelected = this.value[this.widget.options.assistField];
+            this.treeObj.label = this.value[this.widget.options.assistField];
           }
         } else if (this.widget.type === 'html') {
           this.current = data;
@@ -172,6 +189,31 @@ export default class GenerateFormItem extends Vue {
               children: item[this.widget.options.props.children],
             };
           });
+        }
+        // 树懒加载
+        if (this.widget.type === 'treeSelect' && this.widget.options.asyncLoad) {
+          if (this.widget.options.assistField !== '') {
+            if (this.widget.options.multiple) {
+              const ids = this.models[this.widget.model] || [];
+              const test = this.widget.options.assistField
+                ? this.value[this.widget.options.assistField] || []
+                : [];
+              ids.map((r: string, idx: number) => {
+                this.treeList.push({
+                  value: r,
+                  label: test[idx] || '',
+                });
+              });
+              this.treeSelected = test;
+              this.models[this.widget.options.assistField] = test;
+              // console.log('树2', JSON.parse(JSON.stringify(this.treeList)));
+            } else {
+              this.treeObj.label = this.value[this.widget.options.assistField];
+              this.treeSelected = this.value[this.widget.options.assistField];
+              this.models[this.widget.options.assistField] = this.treeObj.label;
+              // console.log('树', JSON.parse(JSON.stringify(this.treeObj)));
+            }
+          }
         }
       });
     }
@@ -193,24 +235,62 @@ export default class GenerateFormItem extends Vue {
    * 下拉树懒加载方法
    * @param treeNode
    */
-  treeSelectLoad(treeNode: any) {
+  treeSelectLoad(treeNode: any, r: any, value: string) {
+    return new Promise((resolve: Function) => {
+      this.remote[this.widget.options.remoteFunc](
+        (data: any) => {
+          const temp = data.map((item: any) => {
+            return {
+              id: item[this.widget.options.props.value],
+              pId: treeNode ? (treeNode.dataRef ? treeNode.dataRef.id : '') : '',
+              key: item[this.widget.options.props.value],
+              value: item[this.widget.options.props.value],
+              label: item[this.widget.options.props.label],
+              children: item[this.widget.options.props.children],
+              isLeaf: item.isLeaf,
+            };
+          });
+          if (value) {
+            r.remoteOptions = temp;
+          } else {
+            if (treeNode.dataRef) {
+              treeNode.dataRef.children = temp;
+            } else {
+              r.remoteOptions = temp;
+            }
+          }
+          // this.widget.options.remoteOptions = this.widget.options.remoteOptions.concat(temp);
+          resolve();
+        },
+        treeNode,
+        value,
+      );
+    });
+  }
+  /**
+   * 下拉数据远端搜索
+   */
+  selectLoad(value: any) {
     return new Promise((resolve: Function) => {
       this.remote[this.widget.options.remoteFunc]((data: any) => {
-        const temp = data.map((item: any) => {
+        this.widget.options.remoteOptions = data.map((item: any) => {
           return {
             id: item[this.widget.options.props.value],
-            pId: treeNode.dataRef.id,
             key: item[this.widget.options.props.value],
             value: item[this.widget.options.props.value],
             label: item[this.widget.options.props.label],
             children: item[this.widget.options.props.children],
           };
         });
-
-        this.widget.options.remoteOptions = this.widget.options.remoteOptions.concat(temp);
         resolve();
-      }, treeNode);
+      }, value);
     });
+  }
+  /**
+   * 下拉数据选项进行搜索
+   */
+  selectfilterOption(input: any, option: any) {
+    return option.componentOptions.children[0].text.toLowerCase().indexOf(input.toLowerCase()) >= 0;
   }
 
   /**
@@ -304,6 +384,15 @@ export default class GenerateFormItem extends Vue {
               this.current.map((item: any) => {
                 return (
                   <span style="margin-right: 10px;">
+                    <img
+                      alt={item.name}
+                      src={item.url}
+                      style="width: 100px; display: block; cursor: pointer;"
+                      onClick={() => {
+                        this.imgViewObj.visible = true;
+                        this.imgViewObj.url = item.url;
+                      }}
+                    />
                     <a-icon type="paper-clip" style="margin-right: 5px;" />
                     <a target="_blank" href={item.url}>
                       {item.name}
@@ -311,6 +400,42 @@ export default class GenerateFormItem extends Vue {
                   </span>
                 );
               })}
+            <a-modal
+              visible={this.imgViewObj.visible}
+              footer={null}
+              title="预览"
+              wrapClassName="component-pop-upload-preview"
+              onCancel={() => {
+                this.imgViewObj.visible = false;
+              }}
+            >
+              <a-carousel
+                arrows
+                scopedSlots={{
+                  prevArrow: (props: any) => {
+                    return (
+                      <div class="custom-slick-arrow" style="left: 10px; z-index: 1;">
+                        <a-icon type="left-circle" />
+                      </div>
+                    );
+                  },
+                  nextArrow: (props: any) => {
+                    return (
+                      <div class="custom-slick-arrow" style="right: 10px">
+                        <a-icon type="right-circle" />
+                      </div>
+                    );
+                  },
+                }}
+              >
+                <div style="height: 200px;">
+                  <img
+                    src={this.imgViewObj.url}
+                    style="object-fit: scale-down; width: 100%; height: 100%;"
+                  />
+                </div>
+              </a-carousel>
+            </a-modal>
           </div>
         ) : (
           <div>
@@ -703,59 +828,114 @@ export default class GenerateFormItem extends Vue {
               ></a-range-picker>
             )}
 
-            {widget.type == 'select' && (
-              <a-select
-                vModel={this.current}
-                placeholder={this.$t(widget.options.placeholder)}
-                mode={widget.options.multiple ? 'multiple' : 'default'}
-                disabled={widget.options.disabled}
-                showSearch={widget.options.filterable}
-                allowClear={widget.options.clearable}
-                optionFilterProp="title"
-                getPopupContainer={(triggerNode: any) => triggerNode.parentNode}
-                style={{ width: widget.options.width }}
-                size={this.globalConfig.size}
-                onBlur={() => {
-                  (this.$refs as any)[widget.model].onFieldBlur();
-                }}
-                onChange={() => {
-                  (this.$refs as any)[widget.model].onFieldChange();
+            {widget.type == 'select' &&
+              (widget.options.filterfetch ? (
+                <a-select
+                  vModel={this.current}
+                  placeholder={this.$t(widget.options.placeholder)}
+                  mode={widget.options.multiple ? 'multiple' : 'default'}
+                  disabled={widget.options.disabled}
+                  showSearch={widget.options.filterfetch}
+                  allowClear={widget.options.clearable}
+                  optionFilterProp="title"
+                  getPopupContainer={(triggerNode: any) => triggerNode.parentNode}
+                  style={{ width: widget.options.width }}
+                  size={this.globalConfig.size}
+                  filter-option={false}
+                  onBlur={() => {
+                    (this.$refs as any)[widget.model].onFieldBlur();
+                  }}
+                  onChange={() => {
+                    (this.$refs as any)[widget.model].onFieldChange();
 
-                  if (this.remote[widget.options.onchange]) {
-                    this.remote[widget.options.onchange](this.current, this.models, this.value);
-                  }
-                }}
-              >
-                {(widget.options.remote
-                  ? widget.options.remoteOptions
-                  : widget.options.options
-                ).map((item: any) => {
-                  return (
-                    <a-select-option
-                      key={item.value}
-                      value={item.value}
-                      title={
-                        widget.options.remote
+                    if (this.remote[widget.options.onchange]) {
+                      this.remote[widget.options.onchange](this.current, this.models, this.value);
+                    }
+                  }}
+                  onSearch={this.selectLoad}
+                >
+                  {(widget.options.remote
+                    ? widget.options.remoteOptions
+                    : widget.options.options
+                  ).map((item: any) => {
+                    return (
+                      <a-select-option
+                        key={item.value}
+                        value={item.value}
+                        title={
+                          widget.options.remote
+                            ? widget.options.showLabel
+                              ? this.$t(item.label)
+                              : item.value
+                            : widget.options.showLabel
+                            ? this.$t(item.label)
+                            : item.value
+                        }
+                      >
+                        {widget.options.remote
                           ? widget.options.showLabel
                             ? this.$t(item.label)
                             : item.value
                           : widget.options.showLabel
                           ? this.$t(item.label)
-                          : item.value
-                      }
-                    >
-                      {widget.options.remote
-                        ? widget.options.showLabel
+                          : item.value}
+                      </a-select-option>
+                    );
+                  })}
+                </a-select>
+              ) : (
+                <a-select
+                  vModel={this.current}
+                  placeholder={this.$t(widget.options.placeholder)}
+                  mode={widget.options.multiple ? 'multiple' : 'default'}
+                  disabled={widget.options.disabled}
+                  showSearch={widget.options.filterable}
+                  allowClear={widget.options.clearable}
+                  optionFilterProp="title"
+                  getPopupContainer={(triggerNode: any) => triggerNode.parentNode}
+                  style={{ width: widget.options.width }}
+                  size={this.globalConfig.size}
+                  onBlur={() => {
+                    (this.$refs as any)[widget.model].onFieldBlur();
+                  }}
+                  onChange={() => {
+                    (this.$refs as any)[widget.model].onFieldChange();
+
+                    if (this.remote[widget.options.onchange]) {
+                      this.remote[widget.options.onchange](this.current, this.models, this.value);
+                    }
+                  }}
+                >
+                  {(widget.options.remote
+                    ? widget.options.remoteOptions
+                    : widget.options.options
+                  ).map((item: any) => {
+                    return (
+                      <a-select-option
+                        key={item.value}
+                        value={item.value}
+                        title={
+                          widget.options.remote
+                            ? widget.options.showLabel
+                              ? this.$t(item.label)
+                              : item.value
+                            : widget.options.showLabel
+                            ? this.$t(item.label)
+                            : item.value
+                        }
+                      >
+                        {widget.options.remote
+                          ? widget.options.showLabel
+                            ? this.$t(item.label)
+                            : item.value
+                          : widget.options.showLabel
                           ? this.$t(item.label)
-                          : item.value
-                        : widget.options.showLabel
-                        ? this.$t(item.label)
-                        : item.value}
-                    </a-select-option>
-                  );
-                })}
-              </a-select>
-            )}
+                          : item.value}
+                      </a-select-option>
+                    );
+                  })}
+                </a-select>
+              ))}
 
             {widget.type == 'ddList' && (
               <this.plugins.DropDownList
@@ -766,6 +946,9 @@ export default class GenerateFormItem extends Vue {
                 placeholder={this.$t(widget.options.placeholder)}
                 allowClear={widget.options.clearable}
                 searchType={widget.options.searchType}
+                filterfetch={widget.options.filterfetch}
+                remote={this.remote}
+                fetchFun={widget.options.remoteFunc}
                 searchParams={
                   widget.options.searchParams && widget.options.searchParams.trim() !== ''
                     ? JSON.parse(widget.options.searchParams)
@@ -784,39 +967,151 @@ export default class GenerateFormItem extends Vue {
               />
             )}
 
-            {widget.type == 'treeSelect' && (
-              <a-tree-select
-                vModel={this.current}
-                placeholder={this.$t(widget.options.placeholder)}
-                multiple={widget.options.multiple}
-                treeCheckable={widget.options.multiple}
-                tree-data-simple-mode={widget.options.asyncLoad}
-                replaceFields={{
-                  children: widget.options.props.children,
-                  title: widget.options.props.label,
-                  key: widget.options.props.value,
-                  value: widget.options.props.value,
-                }}
-                dropdownStyle={{ maxHeight: '300px' }}
-                getPopupContainer={(triggerNode: any) => triggerNode.parentNode}
-                showSearch={widget.options.filterable}
-                disabled={widget.options.disabled}
-                allowClear={widget.options.clearable}
-                treeNodeFilterProp="title"
-                style={{ width: widget.options.width }}
-                treeData={widget.options.remoteOptions}
-                treeDefaultExpandedKeys={[
-                  widget.options.remoteOptions.length > 0 &&
-                    widget.options.remoteOptions[0][widget.options.props.value],
-                ]}
-                size={this.globalConfig.size}
-                showCheckedStrategy={widget.options.showCheckedStrategy}
-                onChange={(value: string | string[], label: Array<string>, extra: any) => {
-                  this.treeSelected = label;
-                }}
-                props={widget.options.asyncLoad ? { loadData: this.treeSelectLoad } : null}
-              ></a-tree-select>
-            )}
+            {widget.type == 'treeSelect' &&
+              (widget.options.asyncLoad ? (
+                widget.options.multiple ? (
+                  <a-tree-select
+                    v-model={this.treeList}
+                    placeholder={this.$t(widget.options.placeholder)}
+                    multiple={widget.options.multiple}
+                    treeCheckable={widget.options.multiple}
+                    tree-data-simple-mode={widget.options.asyncLoad}
+                    replaceFields={{
+                      children: widget.options.props.children,
+                      title: widget.options.props.label,
+                      key: widget.options.props.value,
+                      value: widget.options.props.value,
+                    }}
+                    dropdownStyle={{ maxHeight: '300px' }}
+                    getPopupContainer={(triggerNode: any) => triggerNode.parentNode}
+                    showSearch={widget.options.filterable}
+                    disabled={widget.options.disabled}
+                    allowClear={widget.options.clearable}
+                    treeNodeFilterProp="title"
+                    style={{ width: widget.options.width }}
+                    treeData={widget.options.remoteOptions}
+                    treeDefaultExpandedKeys={[
+                      widget.options.remoteOptions.length > 0 &&
+                        widget.options.remoteOptions[0][widget.options.props.value],
+                    ]}
+                    labelInValue
+                    size={this.globalConfig.size}
+                    showCheckedStrategy={widget.options.showCheckedStrategy}
+                    onChange={(value: string | string[], label: Array<string>, extra: any) => {
+                      this.treeSelected = (value as any).map((o: any) => o.label);
+                      // this.treeObj.label = extra.triggerNode.label;
+                      this.models[this.widget.model] = (value as any).map((o: any) => o.value);
+                      this.current = (value as any).map((o: any) => o.value);
+                      if (this.widget.options.assistField) {
+                        this.models[this.widget.options.assistField] = this.treeSelected;
+                      }
+                      (this.$refs as any)[widget.model].onFieldChange();
+
+                      if (this.remote[widget.options.onchange]) {
+                        this.remote[widget.options.onchange](this.current, this.models, this.value);
+                      }
+                    }}
+                    filterTreeNode={(inputValue: string, treeNode: any) => {
+                      return true;
+                    }}
+                    searchValue={this.treeShowName}
+                    on-search={(value: string) => {
+                      this.treeShowName = value;
+                      this.treeSelectLoad({}, widget.options, value);
+                    }}
+                    load-data={(treeNode: any) => this.treeSelectLoad(treeNode, widget.options, '')}
+                  ></a-tree-select>
+                ) : (
+                  <a-tree-select
+                    v-model={this.treeObj}
+                    placeholder={this.$t(widget.options.placeholder)}
+                    multiple={widget.options.multiple}
+                    treeCheckable={widget.options.multiple}
+                    // tree-data-simple-mode={widget.options.asyncLoad}
+                    replaceFields={{
+                      children: widget.options.props.children,
+                      title: widget.options.props.label,
+                      key: widget.options.props.value,
+                      value: widget.options.props.value,
+                    }}
+                    dropdownStyle={{ maxHeight: '300px' }}
+                    getPopupContainer={(triggerNode: any) => triggerNode.parentNode}
+                    showSearch={widget.options.filterable}
+                    disabled={widget.options.disabled}
+                    allowClear={widget.options.clearable}
+                    treeNodeFilterProp="title"
+                    style={{ width: widget.options.width }}
+                    treeData={widget.options.remoteOptions}
+                    treeDefaultExpandedKeys={[
+                      widget.options.remoteOptions.length > 0 &&
+                        widget.options.remoteOptions[0][widget.options.props.value],
+                    ]}
+                    labelInValue
+                    size={this.globalConfig.size}
+                    showCheckedStrategy={widget.options.showCheckedStrategy}
+                    onChange={(value: string | string[], label: Array<string>, extra: any) => {
+                      this.treeSelected = extra.triggerNode.label;
+                      this.treeObj.label = extra.triggerNode.label;
+                      this.models[this.widget.model] = this.treeObj.value;
+                      this.current = this.treeObj.value;
+                      if (this.widget.options.assistField) {
+                        this.models[this.widget.options.assistField] = this.treeObj.label;
+                      }
+                      (this.$refs as any)[widget.model].onFieldChange();
+
+                      if (this.remote[widget.options.onchange]) {
+                        this.remote[widget.options.onchange](this.current, this.models, this.value);
+                      }
+                    }}
+                    filterTreeNode={(inputValue: string, treeNode: any) => {
+                      return true;
+                    }}
+                    searchValue={this.treeShowName}
+                    on-search={(value: string) => {
+                      this.treeShowName = value;
+                      this.treeSelectLoad({}, widget.options, value);
+                    }}
+                    load-data={(treeNode: any) => this.treeSelectLoad(treeNode, widget.options, '')}
+                  ></a-tree-select>
+                )
+              ) : (
+                <a-tree-select
+                  v-model={this.current}
+                  placeholder={this.$t(widget.options.placeholder)}
+                  multiple={widget.options.multiple}
+                  treeCheckable={widget.options.multiple}
+                  tree-data-simple-mode={widget.options.asyncLoad}
+                  replaceFields={{
+                    children: widget.options.props.children,
+                    title: widget.options.props.label,
+                    key: widget.options.props.value,
+                    value: widget.options.props.value,
+                  }}
+                  dropdownStyle={{ maxHeight: '300px' }}
+                  getPopupContainer={(triggerNode: any) => triggerNode.parentNode}
+                  showSearch={widget.options.filterable}
+                  disabled={widget.options.disabled}
+                  allowClear={widget.options.clearable}
+                  treeNodeFilterProp="title"
+                  style={{ width: widget.options.width }}
+                  treeData={widget.options.remoteOptions}
+                  treeDefaultExpandedKeys={[
+                    widget.options.remoteOptions.length > 0 &&
+                      widget.options.remoteOptions[0][widget.options.props.value],
+                  ]}
+                  size={this.globalConfig.size}
+                  showCheckedStrategy={widget.options.showCheckedStrategy}
+                  onChange={(value: string | string[], label: Array<string>, extra: any) => {
+                    this.treeSelected = label;
+                    (this.$refs as any)[widget.model].onFieldChange();
+
+                    if (this.remote[widget.options.onchange]) {
+                      this.remote[widget.options.onchange](this.current, this.models, this.value);
+                    }
+                  }}
+                  props={widget.options.asyncLoad ? { loadData: this.treeSelectLoad } : null}
+                ></a-tree-select>
+              ))}
 
             {widget.type == 'customSelector' && (
               <a-select
@@ -857,6 +1152,13 @@ export default class GenerateFormItem extends Vue {
                 vModel={this.current}
                 disabled={widget.options.disabled}
                 size={this.globalConfig.size}
+                onChange={() => {
+                  (this.$refs as any)[widget.model].onFieldChange();
+
+                  if (this.remote[widget.options.onchange]) {
+                    this.remote[widget.options.onchange](this.current, this.models, this.value);
+                  }
+                }}
               />
             )}
 
@@ -881,14 +1183,14 @@ export default class GenerateFormItem extends Vue {
                   this.current = data.map(file => ({
                     key: widget.model,
                     keyName: widget.name,
-                    uid: file.id,
+                    uid: file.id || file.uid,
                     url: file.url,
                     name: file.name,
                     status: file.status,
                     path: file.path,
-                    storageId: file.id,
+                    storageId: file.id || file.storageId,
                     storageName: file.name,
-                    storageType: file.contentType,
+                    storageType: file.contentType || file.storageType,
                     storageUrl: file.url,
                   }));
 
@@ -992,6 +1294,8 @@ export default class GenerateFormItem extends Vue {
         )}
       </a-form-model-item>
     );
+
+    // console.log('item', this.remote, JSON.parse(JSON.stringify(widget.options)));
     return (
       <div class="generate-form-item">
         {this.filterKeys.length > 0 && this.filterKeysState ? temp : null}
